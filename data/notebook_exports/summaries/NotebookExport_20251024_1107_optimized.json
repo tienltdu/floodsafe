@@ -1,7 +1,7 @@
 {
   "event_label": "NotebookExport_20251024_1107_optimized",
   "run_generated_at": "2026-04-14T21:16:16.712768",
-  "raw_event_source": "E:\\Research_Tien_fromNov25\\TraKhuc\\rtc_optimization\\src\\DD_sub1234_2025_hourlyPS.xlsx",
+  "raw_event_source": "data/DD_sub1234_2025_hourlyPS.xlsx",
   "time_window": {
     "start": "2025-10-24T00:00:00",
     "stop": "2025-11-07T23:00:00"
@@ -78,7 +78,7 @@
     "flow_peak_reduction_percent": 51.281147622644326
   },
   "files": {
-    "figure_png": "E:\\Research_Tien_fromNov25\\TraKhuc\\rtc_optimization\\output\\notebook_exports\\figures\\NotebookExport_20251024_1107_optimized.png",
-    "summary_xlsx": "E:\\Research_Tien_fromNov25\\TraKhuc\\rtc_optimization\\output\\notebook_exports\\summaries\\NotebookExport_20251024_1107_optimized.xlsx"
+    "figure_png": "data/notebook_exports/figures/NotebookExport_20251024_1107_optimized.png",
+    "summary_xlsx": "data/notebook_exports/summaries/NotebookExport_20251024_1107_optimized.xlsx"
   }
 }
