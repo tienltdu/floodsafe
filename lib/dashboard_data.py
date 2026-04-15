@@ -35,6 +35,31 @@ def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def resolve_local_artifact(path_str: str | None, summary_path: Path, artifact_type: str) -> Path | None:
+    if not path_str:
+        return None
+
+    candidate = Path(path_str)
+    if candidate.exists():
+        return candidate
+
+    name = candidate.name
+    if artifact_type == "summary_xlsx":
+        fallback = summary_path.with_suffix(".xlsx")
+        if fallback.exists():
+            return fallback
+    elif artifact_type == "figure_png":
+        fallback = summary_path.parent.parent / "figures" / name
+        if fallback.exists():
+            return fallback
+    elif artifact_type == "raw_event_source":
+        fallback = OBSERVED_EVENT_PATH
+        if fallback.exists():
+            return fallback
+
+    return candidate
+
+
 def list_run_summaries() -> list[Path]:
     summaries = sorted(SUMMARY_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     return summaries
@@ -99,9 +124,9 @@ def build_merged_timeseries(summary: dict[str, Any], observed: pd.DataFrame, opt
 
 
 def build_readiness(summary_path: Path, summary: dict[str, Any]) -> dict[str, tuple[bool, str]]:
-    raw_source = Path(summary["raw_event_source"]) if summary.get("raw_event_source") else None
-    summary_xlsx = Path(summary["files"]["summary_xlsx"]) if summary.get("files", {}).get("summary_xlsx") else None
-    figure_png = Path(summary["files"]["figure_png"]) if summary.get("files", {}).get("figure_png") else None
+    raw_source = resolve_local_artifact(summary.get("raw_event_source"), summary_path, "raw_event_source")
+    summary_xlsx = resolve_local_artifact(summary.get("files", {}).get("summary_xlsx"), summary_path, "summary_xlsx")
+    figure_png = resolve_local_artifact(summary.get("files", {}).get("figure_png"), summary_path, "figure_png")
     return {
         "run_summary_json": (summary_path.exists(), str(summary_path)),
         "timeseries_export_csv": (TIMESERIES_EXPORT_PATH.exists(), str(TIMESERIES_EXPORT_PATH)),
@@ -117,9 +142,7 @@ def load_dashboard_bundle(summary_path: Path) -> DashboardBundle:
     if "reservoir_parameters" not in summary:
         summary["reservoir_parameters"] = load_reservoir_parameters()
 
-    raw_event_path = Path(summary["raw_event_source"]) if summary.get("raw_event_source") else OBSERVED_EVENT_PATH
-    if not raw_event_path.exists():
-        raw_event_path = OBSERVED_EVENT_PATH
+    raw_event_path = resolve_local_artifact(summary.get("raw_event_source"), summary_path, "raw_event_source")
     observed = load_observed_event(raw_event_path)
     optimized = load_optimized_timeseries()
     merged = build_merged_timeseries(summary, observed, optimized)

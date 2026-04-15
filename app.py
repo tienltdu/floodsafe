@@ -15,6 +15,7 @@ from dashboard_data import (  # noqa: E402
     load_dashboard_bundle,
     list_run_summaries,
     recommendation_text,
+    resolve_local_artifact,
     horizon_slice,
     timestamp_options,
 )
@@ -268,17 +269,23 @@ def main():
     files = bundle.summary.get("files", {})
     col_a, col_b, col_c = st.columns(3)
     json_bytes = bundle.summary_path.read_bytes()
-    xlsx_path = Path(files["summary_xlsx"])
-    png_path = Path(files["figure_png"])
+    xlsx_path = resolve_local_artifact(files.get("summary_xlsx"), bundle.summary_path, "summary_xlsx")
+    png_path = resolve_local_artifact(files.get("figure_png"), bundle.summary_path, "figure_png")
     with col_a:
         st.download_button("Download Summary JSON", data=json_bytes, file_name=bundle.summary_path.name, mime="application/json")
         st.code(str(bundle.summary_path), language=None)
     with col_b:
-        st.download_button("Download Summary XLSX", data=xlsx_path.read_bytes(), file_name=xlsx_path.name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        st.code(str(xlsx_path), language=None)
+        if xlsx_path and xlsx_path.exists():
+            st.download_button("Download Summary XLSX", data=xlsx_path.read_bytes(), file_name=xlsx_path.name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.code(str(xlsx_path), language=None)
+        else:
+            st.error("Summary XLSX not found.")
     with col_c:
-        st.download_button("Download Figure PNG", data=png_path.read_bytes(), file_name=png_path.name, mime="image/png")
-        st.code(str(png_path), language=None)
+        if png_path and png_path.exists():
+            st.download_button("Download Figure PNG", data=png_path.read_bytes(), file_name=png_path.name, mime="image/png")
+            st.code(str(png_path), language=None)
+        else:
+            st.error("Figure PNG not found.")
 
 
 if __name__ == "__main__":

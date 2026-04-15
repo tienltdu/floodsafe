@@ -47,23 +47,4 @@ This folder can be pushed as the app root for:
 Use:
 
 - main file: `app.py`
-- dependencies: `requirements.txt`
-
-## Refreshing Data
-
-When you want newer dashboard content:
-
-1. Run the main notebook in the root project:
-   - `src/Optimazation_Ruby.ipynb`
-2. Copy the refreshed artifacts into this package:
-   - `src/reservoir_parameters.csv`
-   - `src/DD_sub1234_2025_hourlyPS.xlsx`
-   - `src/storage_V.csv`
-   - `output/timeseries_export.csv`
-   - latest `output/notebook_exports/figures/*`
-   - latest `output/notebook_exports/summaries/*`
-
-## Notes
-
-- Keep this package small and stable.
-- Do not place notebooks, model files, or RTC-Tools runtime code here unless the hosted app actually needs them.
+- dependencies: `requirements.txt`.
