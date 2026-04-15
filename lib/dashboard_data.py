@@ -1,0 +1,181 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = PROJECT_ROOT / "data"
+NOTEBOOK_EXPORT_DIR = DATA_DIR / "notebook_exports"
+SUMMARY_DIR = NOTEBOOK_EXPORT_DIR / "summaries"
+FIGURE_DIR = NOTEBOOK_EXPORT_DIR / "figures"
+TIMESERIES_EXPORT_PATH = DATA_DIR / "timeseries_export.csv"
+RESERVOIR_PARAMETER_PATH = DATA_DIR / "reservoir_parameters.csv"
+STORAGE_CURVE_PATH = DATA_DIR / "storage_V.csv"
+OBSERVED_EVENT_PATH = DATA_DIR / "DD_sub1234_2025_hourlyPS.xlsx"
+
+
+@dataclass
+class DashboardBundle:
+    summary_path: Path
+    summary: dict[str, Any]
+    observed: pd.DataFrame
+    optimized: pd.DataFrame
+    merged: pd.DataFrame
+    parameters: dict[str, Any]
+    readiness: dict[str, tuple[bool, str]]
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def list_run_summaries() -> list[Path]:
+    summaries = sorted(SUMMARY_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return summaries
+
+
+def load_reservoir_parameters(path: Path = RESERVOIR_PARAMETER_PATH) -> dict[str, Any]:
+    df = pd.read_csv(path)
+    values: dict[str, Any] = {}
+    units: dict[str, Any] = {}
+    for _, row in df.iterrows():
+        key = str(row["parameter"]).strip().lower().replace(" ", "_").replace("-", "_")
+        values[key] = row["values"]
+        units[key] = row.get("unit")
+
+    for key in (
+        "normal_water_level",
+        "pre_flood_target_level",
+        "dead_water_level",
+        "maximum_allowable_reservoir_level",
+        "downstream_flow_threshold",
+    ):
+        if key in values:
+            values[key] = float(pd.to_numeric(values[key], errors="coerce"))
+
+    return {"values": values, "units": units}
+
+
+def load_storage_curve(path: Path = STORAGE_CURVE_PATH) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    return df[["storage_V", "storage_H"]].dropna().sort_values("storage_V")
+
+
+def load_optimized_timeseries(path: Path = TIMESERIES_EXPORT_PATH) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    df["time"] = pd.to_datetime(df["time"])
+    curve = load_storage_curve()
+    df["reservoir_level_optimized"] = np.interp(df["V_Reservoir1"], curve["storage_V"], curve["storage_H"])
+    return df
+
+
+def load_observed_event(path: Path) -> pd.DataFrame:
+    df = pd.read_excel(path)
+    df["Datetime"] = pd.to_datetime(df["Datetime"], errors="coerce")
+    df = df[df["Datetime"].notna()].sort_values("Datetime").infer_objects(copy=False).interpolate()
+    return df
+
+
+def build_merged_timeseries(summary: dict[str, Any], observed: pd.DataFrame, optimized: pd.DataFrame) -> pd.DataFrame:
+    start_dt = pd.to_datetime(summary["time_window"]["start"])
+    stop_dt = pd.to_datetime(summary["time_window"]["stop"])
+
+    observed = observed[(observed["Datetime"] >= start_dt) & (observed["Datetime"] <= stop_dt)].copy()
+    optimized = optimized[(optimized["time"] >= start_dt) & (optimized["time"] <= stop_dt)].copy()
+
+    merged = observed.merge(optimized, left_on="Datetime", right_on="time", how="inner")
+    merged["downstream_threshold"] = summary.get("reservoir_parameters", {}).get("values", {}).get("downstream_flow_threshold")
+    merged["normal_water_level"] = summary.get("reservoir_parameters", {}).get("values", {}).get("normal_water_level")
+    merged["pre_flood_target_level"] = summary.get("reservoir_parameters", {}).get("values", {}).get("pre_flood_target_level")
+    merged["dead_water_level"] = summary.get("reservoir_parameters", {}).get("values", {}).get("dead_water_level")
+    merged["maximum_allowable_reservoir_level"] = summary.get("reservoir_parameters", {}).get("values", {}).get("maximum_allowable_reservoir_level")
+    return merged
+
+
+def build_readiness(summary_path: Path, summary: dict[str, Any]) -> dict[str, tuple[bool, str]]:
+    raw_source = Path(summary["raw_event_source"]) if summary.get("raw_event_source") else None
+    summary_xlsx = Path(summary["files"]["summary_xlsx"]) if summary.get("files", {}).get("summary_xlsx") else None
+    figure_png = Path(summary["files"]["figure_png"]) if summary.get("files", {}).get("figure_png") else None
+    return {
+        "run_summary_json": (summary_path.exists(), str(summary_path)),
+        "timeseries_export_csv": (TIMESERIES_EXPORT_PATH.exists(), str(TIMESERIES_EXPORT_PATH)),
+        "reservoir_parameters_csv": (RESERVOIR_PARAMETER_PATH.exists(), str(RESERVOIR_PARAMETER_PATH)),
+        "raw_event_source_xlsx": (raw_source.exists() if raw_source else False, str(raw_source) if raw_source else "missing"),
+        "summary_xlsx": (summary_xlsx.exists() if summary_xlsx else False, str(summary_xlsx) if summary_xlsx else "missing"),
+        "figure_png": (figure_png.exists() if figure_png else False, str(figure_png) if figure_png else "missing"),
+    }
+
+
+def load_dashboard_bundle(summary_path: Path) -> DashboardBundle:
+    summary = load_json(summary_path)
+    if "reservoir_parameters" not in summary:
+        summary["reservoir_parameters"] = load_reservoir_parameters()
+
+    raw_event_path = Path(summary["raw_event_source"]) if summary.get("raw_event_source") else OBSERVED_EVENT_PATH
+    if not raw_event_path.exists():
+        raw_event_path = OBSERVED_EVENT_PATH
+    observed = load_observed_event(raw_event_path)
+    optimized = load_optimized_timeseries()
+    merged = build_merged_timeseries(summary, observed, optimized)
+    readiness = build_readiness(summary_path, summary)
+
+    return DashboardBundle(
+        summary_path=summary_path,
+        summary=summary,
+        observed=observed,
+        optimized=optimized,
+        merged=merged,
+        parameters=summary["reservoir_parameters"],
+        readiness=readiness,
+    )
+
+
+def horizon_slice(df: pd.DataFrame, current_time: pd.Timestamp, horizon_hours: int) -> pd.DataFrame:
+    end_time = current_time + pd.Timedelta(hours=horizon_hours)
+    return df[(df["Datetime"] >= current_time) & (df["Datetime"] <= end_time)].copy()
+
+
+def timestamp_options(df: pd.DataFrame) -> list[pd.Timestamp]:
+    return list(pd.to_datetime(df["Datetime"]).tolist())
+
+
+def recommendation_text(summary: dict[str, Any], current_row: pd.Series) -> tuple[str, str, str]:
+    status = summary.get("status", "watch")
+    params = summary["reservoir_parameters"]["values"]
+    priority = params.get("priority_order_of_objectives", "")
+
+    if status == "critical":
+        action = "Operate in flood-control mode and prioritize downstream-risk monitoring."
+        reason = (
+            f"Optimized downstream flow still exceeds the threshold of "
+            f"{params.get('downstream_flow_threshold')} {summary['reservoir_parameters']['units'].get('downstream_flow_threshold', '')}."
+        )
+    elif status == "watch":
+        action = "Maintain controlled release and reassess the next forecast window closely."
+        reason = "The optimized trajectory approaches operating targets and needs active watch."
+    else:
+        action = "Continue the optimized release path and monitor for forecast changes."
+        reason = "Reservoir and downstream metrics remain within configured thresholds in the optimized run."
+
+    tradeoff = (
+        f"Optimized peak downstream flow is {summary['control_point']['flow_peak_reduction_percent']:.1f}% lower than observed, "
+        f"while end-of-event reservoir storage changes by {summary['reservoir']['storage_change_percent']:.1f}%."
+    )
+
+    if isinstance(current_row, pd.Series) and not current_row.empty:
+        reason += (
+            f" Current playback shows reservoir level {current_row['WLDD']:.2f} m, "
+            f"optimized release {current_row['Qoutput_Reservoir1']:.2f} m3/s, "
+            f"and downstream optimized flow {current_row['Q_controlpoint']:.2f} m3/s."
+        )
+
+    if priority:
+        tradeoff += f" Objective priority: {priority}"
+
+    return action, reason, tradeoff
