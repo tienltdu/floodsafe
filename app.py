@@ -124,7 +124,7 @@ def make_level_chart(df, params, current_time):
             x=df["Datetime"],
             y=df["reservoir_level_optimized"],
             name="Optimized WL",
-            line=dict(color="#d92d20", width=2.5, dash="dash"),
+            line=dict(color="magenta", width=2.5, dash="dash"),
         )
     )
     band_lines = [
@@ -157,7 +157,7 @@ def make_release_chart(df, current_time):
             x=df["Datetime"],
             y=df["Qoutput_Reservoir1"],
             name="Optimized Outflow",
-            line=dict(color="#d92d20", width=2.5),
+            line=dict(color="magenta", width=2.5),
         )
     )
     fig.add_vline(x=current_time, line_color="#98a2b3", line_dash="dash")
@@ -180,7 +180,7 @@ def make_downstream_chart(df, threshold, current_time):
             x=df["Datetime"],
             y=df["Q_controlpoint"],
             name="Optimized Downstream Flow",
-            line=dict(color="#7a5af8", width=2.5),
+            line=dict(color="magenta", width=2.5),
         )
     )
     if threshold is not None:
