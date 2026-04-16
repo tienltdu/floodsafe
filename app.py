@@ -27,7 +27,7 @@ except ImportError:
     def _percent_change(baseline: float, candidate: float) -> float:
         if pd.isna(baseline) or baseline == 0:
             return 0.0
-        return ((baseline - candidate) / baseline) * 100.0
+        return ((candidate - baseline) / baseline) * 100.0
 
     def derive_window_summary(window_df):
         if window_df.empty:
@@ -320,8 +320,8 @@ def main():
                     "Window end",
                     "Observed end WL",
                     "Optimized end WL",
-                    "Release peak reduction",
-                    "Downstream peak reduction",
+                    "Release peak change vs observed",
+                    "Downstream peak change vs observed",
                 ],
                 "Value": [
                     window_summary["window_start"].strftime("%Y-%m-%d %H:%M"),

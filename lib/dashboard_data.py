@@ -171,7 +171,15 @@ def timestamp_options(df: pd.DataFrame) -> list[pd.Timestamp]:
 def percent_change(baseline: float, candidate: float) -> float:
     if pd.isna(baseline) or baseline == 0:
         return 0.0
-    return ((baseline - candidate) / baseline) * 100.0
+    return ((candidate - baseline) / baseline) * 100.0
+
+
+def describe_flow_change(change_percent: float) -> str:
+    if change_percent > 0:
+        return f"{change_percent:.1f}% higher than observed"
+    if change_percent < 0:
+        return f"{change_percent:.1f}% lower than observed"
+    return "0.0% unchanged from observed"
 
 
 def derive_window_summary(window_df: pd.DataFrame) -> dict[str, Any]:
@@ -279,8 +287,8 @@ def recommendation_text(
 
     tradeoff = (
         f"Within the selected window, optimized peak downstream flow is "
-        f"{window_summary['downstream_peak_reduction_percent']:.1f}% lower than observed, "
-        f"and optimized peak release is {window_summary['release_peak_reduction_percent']:.1f}% lower than observed."
+        f"{describe_flow_change(window_summary['downstream_peak_reduction_percent'])}, "
+        f"and optimized peak release is {describe_flow_change(window_summary['release_peak_reduction_percent'])}."
     )
 
     if isinstance(current_row, pd.Series) and not current_row.empty:
