@@ -12,6 +12,8 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 from dashboard_data import (  # noqa: E402
+    derive_operational_state,
+    derive_window_summary,
     load_dashboard_bundle,
     list_run_summaries,
     recommendation_text,
@@ -147,9 +149,8 @@ def render_alerts(flags: dict[str, bool]):
         "reservoir_above_normal_level": "Reservoir above normal level",
         "reservoir_above_maximum_allowable": "Reservoir above maximum allowable level",
         "downstream_above_threshold_optimized": "Optimized downstream flow above threshold",
-        "downstream_above_threshold_observed": "Observed downstream flow above threshold",
     }
-    active = [label_map[key] for key, value in flags.items() if value]
+    active = [label_map[key] for key, value in flags.items() if value and key in label_map]
     if not active:
         st.success("No active threshold alerts in the selected optimized run.")
     else:
@@ -160,6 +161,10 @@ def render_alerts(flags: dict[str, bool]):
 def main():
     st.title("Dakdrinh Flood Operations Demo")
     st.caption("2025 flood event playback and recommendation screen based on notebook-generated optimization outputs.")
+
+    horizons = [24, 48, 72]
+    selected_horizon = st.sidebar.radio("Decision Horizon", horizons, index=1)
+    playback_container = st.sidebar.container()
 
     summary_paths = list_run_summaries()
     if not summary_paths:
@@ -177,25 +182,23 @@ def main():
 
     render_readiness(bundle.readiness)
 
-    horizons = bundle.summary.get("dashboard_defaults", {}).get("horizons_hours", [24, 48, 72])
-    default_horizon = bundle.summary.get("dashboard_defaults", {}).get("default_horizon_hours", 48)
-    selected_horizon = st.sidebar.radio("Decision Horizon", horizons, index=horizons.index(default_horizon) if default_horizon in horizons else 0)
-
     timestamps = timestamp_options(bundle.merged)
     if not timestamps:
         st.error("No aligned observed/optimized timestamps were found for the selected run.")
         st.stop()
 
     default_time = timestamps[0]
-    current_time = st.sidebar.select_slider("Playback Time", options=timestamps, value=default_time)
+    current_time = playback_container.select_slider("Playback Time", options=timestamps, value=default_time)
 
     window_df = horizon_slice(bundle.merged, current_time, selected_horizon)
     if window_df.empty:
         st.error("Selected time window has no data.")
         st.stop()
-    current_row = window_df.iloc[0]
+    operational_state = derive_operational_state(window_df, bundle.summary)
+    window_summary = derive_window_summary(window_df)
+    current_row = operational_state["current_row"]
 
-    status = bundle.summary.get("status", "watch")
+    status = operational_state["status"]
     st.markdown(
         f"""
         <div style="padding:0.8rem 1rem;border-radius:12px;background:{status_color(status)};color:white;font-weight:600;display:inline-block;">
@@ -210,15 +213,15 @@ def main():
     top2.metric("Reservoir Level", f"{current_row['WLDD']:.2f} m")
     top3.metric("Optimized Release", f"{current_row['Qoutput_Reservoir1']:.2f} m3/s")
     top4.metric("Optimized Downstream", f"{current_row['Q_controlpoint']:.2f} m3/s")
-    top5.metric("End WL (Optimized)", f"{bundle.summary['reservoir']['water_level_optimized_end_m']:.2f} m")
+    top5.metric("End WL (Optimized)", f"{window_summary['water_level_optimized_end_m']:.2f} m")
 
     left, right = st.columns([1.1, 0.9])
     with left:
         st.subheader("Alerts")
-        render_alerts(bundle.summary.get("threshold_flags", {}))
+        render_alerts(operational_state["threshold_flags"])
     with right:
         st.subheader("Recommendation")
-        action, reason, tradeoff = recommendation_text(bundle.summary, current_row)
+        action, reason, tradeoff = recommendation_text(bundle.summary, operational_state, window_summary)
         st.info(action)
         st.write(reason)
         st.caption(tradeoff)
@@ -237,30 +240,30 @@ def main():
 
     st.subheader("Run Summary")
     sum1, sum2, sum3, sum4 = st.columns(4)
-    sum1.metric("Observed Peak Release", f"{bundle.summary['reservoir']['release_peak_observed']['value']:.1f} m3/s")
-    sum2.metric("Optimized Peak Release", f"{bundle.summary['reservoir']['release_peak_optimized']['value']:.1f} m3/s")
-    sum3.metric("Observed Peak Downstream", f"{bundle.summary['control_point']['flow_peak_observed']['value']:.1f} m3/s")
-    sum4.metric("Optimized Peak Downstream", f"{bundle.summary['control_point']['flow_peak_optimized']['value']:.1f} m3/s")
+    sum1.metric("Observed Peak Release", f"{window_summary['release_peak_observed']:.1f} m3/s")
+    sum2.metric("Optimized Peak Release", f"{window_summary['release_peak_optimized']:.1f} m3/s")
+    sum3.metric("Observed Peak Downstream", f"{window_summary['downstream_peak_observed']:.1f} m3/s")
+    sum4.metric("Optimized Peak Downstream", f"{window_summary['downstream_peak_optimized']:.1f} m3/s")
 
     st.dataframe(
         {
-            "Metric": [
-                "Event label",
-                "Run generated at",
-                "Observed end WL",
-                "Optimized end WL",
-                "Release peak reduction",
-                "Downstream peak reduction",
-            ],
-            "Value": [
-                bundle.summary["event_label"],
-                bundle.summary.get("run_generated_at", "n/a"),
-                f"{bundle.summary['reservoir']['water_level_observed_end_m']:.2f} m",
-                f"{bundle.summary['reservoir']['water_level_optimized_end_m']:.2f} m",
-                f"{bundle.summary['reservoir']['release_peak_reduction_percent']:.1f} %",
-                f"{bundle.summary['control_point']['flow_peak_reduction_percent']:.1f} %",
-            ],
-        },
+                "Metric": [
+                    "Window start",
+                    "Window end",
+                    "Observed end WL",
+                    "Optimized end WL",
+                    "Release peak reduction",
+                    "Downstream peak reduction",
+                ],
+                "Value": [
+                    window_summary["window_start"].strftime("%Y-%m-%d %H:%M"),
+                    window_summary["window_end"].strftime("%Y-%m-%d %H:%M"),
+                    f"{window_summary['water_level_observed_end_m']:.2f} m",
+                    f"{window_summary['water_level_optimized_end_m']:.2f} m",
+                    f"{window_summary['release_peak_reduction_percent']:.1f} %",
+                    f"{window_summary['downstream_peak_reduction_percent']:.1f} %",
+                ],
+            },
         hide_index=True,
         use_container_width=True,
     )

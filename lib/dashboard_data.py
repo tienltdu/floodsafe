@@ -168,27 +168,119 @@ def timestamp_options(df: pd.DataFrame) -> list[pd.Timestamp]:
     return list(pd.to_datetime(df["Datetime"]).tolist())
 
 
-def recommendation_text(summary: dict[str, Any], current_row: pd.Series) -> tuple[str, str, str]:
-    status = summary.get("status", "watch")
+def percent_change(baseline: float, candidate: float) -> float:
+    if pd.isna(baseline) or baseline == 0:
+        return 0.0
+    return ((baseline - candidate) / baseline) * 100.0
+
+
+def derive_window_summary(window_df: pd.DataFrame) -> dict[str, Any]:
+    if window_df.empty:
+        return {}
+
+    release_peak_observed = float(window_df["QoutDD"].max())
+    release_peak_optimized = float(window_df["Qoutput_Reservoir1"].max())
+    downstream_peak_observed = float(window_df["QinSG"].max())
+    downstream_peak_optimized = float(window_df["Q_controlpoint"].max())
+
+    observed_end_wl = float(window_df["WLDD"].iloc[-1])
+    optimized_end_wl = float(window_df["reservoir_level_optimized"].iloc[-1])
+
+    return {
+        "window_start": window_df["Datetime"].min(),
+        "window_end": window_df["Datetime"].max(),
+        "release_peak_observed": release_peak_observed,
+        "release_peak_optimized": release_peak_optimized,
+        "downstream_peak_observed": downstream_peak_observed,
+        "downstream_peak_optimized": downstream_peak_optimized,
+        "release_peak_reduction_percent": percent_change(release_peak_observed, release_peak_optimized),
+        "downstream_peak_reduction_percent": percent_change(downstream_peak_observed, downstream_peak_optimized),
+        "water_level_observed_end_m": observed_end_wl,
+        "water_level_optimized_end_m": optimized_end_wl,
+    }
+
+
+def derive_operational_state(window_df: pd.DataFrame, summary: dict[str, Any]) -> dict[str, Any]:
+    params = summary["reservoir_parameters"]["values"]
+    current_row = window_df.iloc[0] if not window_df.empty else pd.Series(dtype="object")
+
+    pre_flood_target = params.get("pre_flood_target_level")
+    normal_level = params.get("normal_water_level")
+    maximum_level = params.get("maximum_allowable_reservoir_level")
+    downstream_threshold = params.get("downstream_flow_threshold")
+
+    def exceeds(series_name: str, threshold: float | None) -> bool:
+        if threshold is None or series_name not in window_df:
+            return False
+        return bool((window_df[series_name] > threshold).fillna(False).any())
+
+    threshold_flags = {
+        "reservoir_above_pre_flood_target": exceeds("reservoir_level_optimized", pre_flood_target),
+        "reservoir_above_normal_level": exceeds("reservoir_level_optimized", normal_level),
+        "reservoir_above_maximum_allowable": exceeds("reservoir_level_optimized", maximum_level),
+        "downstream_above_threshold_optimized": exceeds("Q_controlpoint", downstream_threshold),
+    }
+
+    if threshold_flags["reservoir_above_maximum_allowable"] or threshold_flags["downstream_above_threshold_optimized"]:
+        status = "critical"
+    elif threshold_flags["reservoir_above_pre_flood_target"] or threshold_flags["reservoir_above_normal_level"]:
+        status = "watch"
+    else:
+        status = "normal"
+
+    return {
+        "status": status,
+        "threshold_flags": threshold_flags,
+        "current_row": current_row,
+        "window_start": window_df["Datetime"].min() if "Datetime" in window_df else None,
+        "window_end": window_df["Datetime"].max() if "Datetime" in window_df else None,
+    }
+
+
+def recommendation_text(
+    summary: dict[str, Any],
+    operational_state: dict[str, Any],
+    window_summary: dict[str, Any],
+) -> tuple[str, str, str]:
+    status = operational_state.get("status", "watch")
+    current_row = operational_state.get("current_row")
+    flags = operational_state.get("threshold_flags", {})
     params = summary["reservoir_parameters"]["values"]
     priority = params.get("priority_order_of_objectives", "")
 
     if status == "critical":
         action = "Operate in flood-control mode and prioritize downstream-risk monitoring."
-        reason = (
-            f"Optimized downstream flow still exceeds the threshold of "
-            f"{params.get('downstream_flow_threshold')} {summary['reservoir_parameters']['units'].get('downstream_flow_threshold', '')}."
-        )
+        if flags.get("reservoir_above_maximum_allowable"):
+            reason = (
+                "The optimized reservoir trajectory exceeds the maximum allowable operating level "
+                f"of {params.get('maximum_allowable_reservoir_level')} "
+                f"{summary['reservoir_parameters']['units'].get('maximum_allowable_reservoir_level', '')} "
+                "within the selected decision horizon."
+            )
+        else:
+            reason = (
+                "The optimized downstream flow exceeds the threshold of "
+                f"{params.get('downstream_flow_threshold')} "
+                f"{summary['reservoir_parameters']['units'].get('downstream_flow_threshold', '')} "
+                "within the selected decision horizon."
+            )
     elif status == "watch":
         action = "Maintain controlled release and reassess the next forecast window closely."
-        reason = "The optimized trajectory approaches operating targets and needs active watch."
+        if flags.get("reservoir_above_pre_flood_target"):
+            reason = (
+                "The optimized reservoir level rises above the pre-flood target within the selected decision horizon, "
+                "so the release path should stay under active review."
+            )
+        else:
+            reason = "The optimized trajectory approaches operating targets and needs active watch."
     else:
         action = "Continue the optimized release path and monitor for forecast changes."
         reason = "Reservoir and downstream metrics remain within configured thresholds in the optimized run."
 
     tradeoff = (
-        f"Optimized peak downstream flow is {summary['control_point']['flow_peak_reduction_percent']:.1f}% lower than observed, "
-        f"while end-of-event reservoir storage changes by {summary['reservoir']['storage_change_percent']:.1f}%."
+        f"Within the selected window, optimized peak downstream flow is "
+        f"{window_summary['downstream_peak_reduction_percent']:.1f}% lower than observed, "
+        f"and optimized peak release is {window_summary['release_peak_reduction_percent']:.1f}% lower than observed."
     )
 
     if isinstance(current_row, pd.Series) and not current_row.empty:
