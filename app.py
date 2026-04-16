@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import plotly.graph_objects as go
+import pandas as pd
 import streamlit as st
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -12,8 +13,6 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 from dashboard_data import (  # noqa: E402
-    derive_operational_state,
-    derive_window_summary,
     load_dashboard_bundle,
     list_run_summaries,
     recommendation_text,
@@ -21,6 +20,75 @@ from dashboard_data import (  # noqa: E402
     horizon_slice,
     timestamp_options,
 )
+
+try:  # noqa: E402
+    from dashboard_data import derive_operational_state, derive_window_summary  # type: ignore
+except ImportError:
+    def _percent_change(baseline: float, candidate: float) -> float:
+        if pd.isna(baseline) or baseline == 0:
+            return 0.0
+        return ((baseline - candidate) / baseline) * 100.0
+
+    def derive_window_summary(window_df):
+        if window_df.empty:
+            return {}
+
+        release_peak_observed = float(window_df["QoutDD"].max())
+        release_peak_optimized = float(window_df["Qoutput_Reservoir1"].max())
+        downstream_peak_observed = float(window_df["QinSG"].max())
+        downstream_peak_optimized = float(window_df["Q_controlpoint"].max())
+
+        observed_end_wl = float(window_df["WLDD"].iloc[-1])
+        optimized_end_wl = float(window_df["reservoir_level_optimized"].iloc[-1])
+
+        return {
+            "window_start": window_df["Datetime"].min(),
+            "window_end": window_df["Datetime"].max(),
+            "release_peak_observed": release_peak_observed,
+            "release_peak_optimized": release_peak_optimized,
+            "downstream_peak_observed": downstream_peak_observed,
+            "downstream_peak_optimized": downstream_peak_optimized,
+            "release_peak_reduction_percent": _percent_change(release_peak_observed, release_peak_optimized),
+            "downstream_peak_reduction_percent": _percent_change(downstream_peak_observed, downstream_peak_optimized),
+            "water_level_observed_end_m": observed_end_wl,
+            "water_level_optimized_end_m": optimized_end_wl,
+        }
+
+    def derive_operational_state(window_df, summary):
+        params = summary["reservoir_parameters"]["values"]
+        current_row = window_df.iloc[0] if not window_df.empty else pd.Series(dtype="object")
+
+        pre_flood_target = params.get("pre_flood_target_level")
+        normal_level = params.get("normal_water_level")
+        maximum_level = params.get("maximum_allowable_reservoir_level")
+        downstream_threshold = params.get("downstream_flow_threshold")
+
+        def exceeds(series_name, threshold):
+            if threshold is None or series_name not in window_df:
+                return False
+            return bool((window_df[series_name] > threshold).fillna(False).any())
+
+        threshold_flags = {
+            "reservoir_above_pre_flood_target": exceeds("reservoir_level_optimized", pre_flood_target),
+            "reservoir_above_normal_level": exceeds("reservoir_level_optimized", normal_level),
+            "reservoir_above_maximum_allowable": exceeds("reservoir_level_optimized", maximum_level),
+            "downstream_above_threshold_optimized": exceeds("Q_controlpoint", downstream_threshold),
+        }
+
+        if threshold_flags["reservoir_above_maximum_allowable"] or threshold_flags["downstream_above_threshold_optimized"]:
+            status = "critical"
+        elif threshold_flags["reservoir_above_pre_flood_target"] or threshold_flags["reservoir_above_normal_level"]:
+            status = "watch"
+        else:
+            status = "normal"
+
+        return {
+            "status": status,
+            "threshold_flags": threshold_flags,
+            "current_row": current_row,
+            "window_start": window_df["Datetime"].min() if "Datetime" in window_df else None,
+            "window_end": window_df["Datetime"].max() if "Datetime" in window_df else None,
+        }
 
 
 st.set_page_config(
