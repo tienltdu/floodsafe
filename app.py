@@ -264,7 +264,7 @@ def render_readiness(readiness: dict[str, tuple[bool, str]]):
 
 def render_alerts(flags: dict[str, bool]):
     label_map = {
-        "reservoir_above_pre_flood_target": "Reservoir above pre-flood target",
+        "reservoir_above_pre_flood_target": "Reservoir above pre-flood maximum level",
         "reservoir_above_normal_level": "Reservoir above normal level",
         "reservoir_above_maximum_allowable": "Reservoir above maximum allowable level",
         "downstream_above_threshold_optimized": "Optimized downstream flow above threshold",
