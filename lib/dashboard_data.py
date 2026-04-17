@@ -18,6 +18,9 @@ TIMESERIES_EXPORT_PATH = DATA_DIR / "timeseries_export.csv"
 RESERVOIR_PARAMETER_PATH = DATA_DIR / "reservoir_parameters.csv"
 STORAGE_CURVE_PATH = DATA_DIR / "storage_V.csv"
 OBSERVED_EVENT_PATH = DATA_DIR / "DD_sub1234_2025_hourlyPS.xlsx"
+DOWNSTREAM_STAGE_K = 71.41922
+DOWNSTREAM_STAGE_P = 2.016432
+DOWNSTREAM_STAGE_WREF = 27.2
 
 
 @dataclass
@@ -74,12 +77,18 @@ def load_reservoir_parameters(path: Path = RESERVOIR_PARAMETER_PATH) -> dict[str
         values[key] = row["values"]
         units[key] = row.get("unit")
 
+    if "pre_flood_maximum_level" not in values and "pre_flood_target_level" in values:
+        values["pre_flood_maximum_level"] = values["pre_flood_target_level"]
+        units["pre_flood_maximum_level"] = units.get("pre_flood_target_level")
+
     for key in (
         "normal_water_level",
-        "pre_flood_target_level",
+        "pre_flood_maximum_level",
+        "pre_flood_minimum_level",
         "dead_water_level",
         "maximum_allowable_reservoir_level",
         "downstream_flow_threshold",
+        "downstream_water_level_threshold",
     ):
         if key in values:
             values[key] = float(pd.to_numeric(values[key], errors="coerce"))
@@ -95,8 +104,11 @@ def load_storage_curve(path: Path = STORAGE_CURVE_PATH) -> pd.DataFrame:
 def load_optimized_timeseries(path: Path = TIMESERIES_EXPORT_PATH) -> pd.DataFrame:
     df = pd.read_csv(path)
     df["time"] = pd.to_datetime(df["time"])
+    df["Qoutput_Reservoir1"] = np.clip(pd.to_numeric(df["Qoutput_Reservoir1"], errors="coerce"), a_min=0.0, a_max=None)
+    df["Q_controlpoint"] = np.clip(pd.to_numeric(df["Q_controlpoint"], errors="coerce"), a_min=0.0, a_max=None)
     curve = load_storage_curve()
     df["reservoir_level_optimized"] = np.interp(df["V_Reservoir1"], curve["storage_V"], curve["storage_H"])
+    df["downstream_level_optimized"] = np.power(df["Q_controlpoint"] / DOWNSTREAM_STAGE_K, 1.0 / DOWNSTREAM_STAGE_P) + DOWNSTREAM_STAGE_WREF
     return df
 
 
@@ -116,8 +128,13 @@ def build_merged_timeseries(summary: dict[str, Any], observed: pd.DataFrame, opt
 
     merged = observed.merge(optimized, left_on="Datetime", right_on="time", how="inner")
     merged["downstream_threshold"] = summary.get("reservoir_parameters", {}).get("values", {}).get("downstream_flow_threshold")
+    merged["downstream_water_level_threshold"] = summary.get("reservoir_parameters", {}).get("values", {}).get("downstream_water_level_threshold")
     merged["normal_water_level"] = summary.get("reservoir_parameters", {}).get("values", {}).get("normal_water_level")
-    merged["pre_flood_target_level"] = summary.get("reservoir_parameters", {}).get("values", {}).get("pre_flood_target_level")
+    pre_flood_maximum_level = summary.get("reservoir_parameters", {}).get("values", {}).get("pre_flood_maximum_level")
+    if pre_flood_maximum_level is None:
+        pre_flood_maximum_level = summary.get("reservoir_parameters", {}).get("values", {}).get("pre_flood_target_level")
+    merged["pre_flood_maximum_level"] = pre_flood_maximum_level
+    merged["pre_flood_minimum_level"] = summary.get("reservoir_parameters", {}).get("values", {}).get("pre_flood_minimum_level")
     merged["dead_water_level"] = summary.get("reservoir_parameters", {}).get("values", {}).get("dead_water_level")
     merged["maximum_allowable_reservoir_level"] = summary.get("reservoir_parameters", {}).get("values", {}).get("maximum_allowable_reservoir_level")
     return merged
@@ -139,8 +156,14 @@ def build_readiness(summary_path: Path, summary: dict[str, Any]) -> dict[str, tu
 
 def load_dashboard_bundle(summary_path: Path) -> DashboardBundle:
     summary = load_json(summary_path)
-    if "reservoir_parameters" not in summary:
-        summary["reservoir_parameters"] = load_reservoir_parameters()
+    csv_parameters = load_reservoir_parameters()
+    summary_parameters = summary.get("reservoir_parameters", {})
+    summary_values = summary_parameters.get("values", {})
+    summary_units = summary_parameters.get("units", {})
+    summary["reservoir_parameters"] = {
+        "values": {**summary_values, **csv_parameters["values"]},
+        "units": {**summary_units, **csv_parameters["units"]},
+    }
 
     raw_event_path = resolve_local_artifact(summary.get("raw_event_source"), summary_path, "raw_event_source")
     observed = load_observed_event(raw_event_path)
@@ -212,7 +235,7 @@ def derive_operational_state(window_df: pd.DataFrame, summary: dict[str, Any]) -
     params = summary["reservoir_parameters"]["values"]
     current_row = window_df.iloc[0] if not window_df.empty else pd.Series(dtype="object")
 
-    pre_flood_target = params.get("pre_flood_target_level")
+    pre_flood_target = params.get("pre_flood_maximum_level", params.get("pre_flood_target_level"))
     normal_level = params.get("normal_water_level")
     maximum_level = params.get("maximum_allowable_reservoir_level")
     downstream_threshold = params.get("downstream_flow_threshold")

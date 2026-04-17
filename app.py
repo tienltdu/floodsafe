@@ -58,7 +58,7 @@ except ImportError:
         params = summary["reservoir_parameters"]["values"]
         current_row = window_df.iloc[0] if not window_df.empty else pd.Series(dtype="object")
 
-        pre_flood_target = params.get("pre_flood_target_level")
+        pre_flood_target = params.get("pre_flood_maximum_level", params.get("pre_flood_target_level"))
         normal_level = params.get("normal_water_level")
         maximum_level = params.get("maximum_allowable_reservoir_level")
         downstream_threshold = params.get("downstream_flow_threshold")
@@ -128,12 +128,15 @@ def make_level_chart(df, params, current_time):
         )
     )
     band_lines = [
-        ("Dead WL", params["dead_water_level"], "#6941c6"),
-        ("Pre-Flood", params["pre_flood_target_level"], "#16a34a"),
-        ("Normal WL", params["normal_water_level"], "#2563eb"),
-        ("Max Allowable", params["maximum_allowable_reservoir_level"], "#b42318"),
+        ("Dead WL", params.get("dead_water_level"), "#6941c6"),
+        ("Pre-Flood Minimum Level", params.get("pre_flood_minimum_level"), "#12b76a"),
+        ("Pre-Flood Maximum Level", params.get("pre_flood_maximum_level", params.get("pre_flood_target_level")), "#16a34a"),
+        ("Normal WL", params.get("normal_water_level"), "#2563eb"),
+        ("Max Allowable", params.get("maximum_allowable_reservoir_level"), "#b42318"),
     ]
     for name, value, color in band_lines:
+        if value is None or pd.isna(value):
+            continue
         fig.add_hline(y=value, line_color=color, line_dash="dot", annotation_text=name, annotation_position="top left")
 
     fig.add_vline(x=current_time, line_color="#98a2b3", line_dash="dash")
@@ -172,9 +175,17 @@ def make_release_chart(df, current_time):
     return fig
 
 
-def make_downstream_chart(df, threshold, current_time):
+def make_downstream_flow_chart(df, threshold, current_time):
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df["Datetime"], y=df["QinSG"], name="Observed Downstream Flow", line=dict(color="black", width=2)))
+    fig.add_trace(
+        go.Scatter(
+            x=df["Datetime"],
+            y=df["QinSG"],
+            name="Observed Downstream Flow",
+            line=dict(color="black", width=2),
+            yaxis="y",
+        )
+    )
     fig.add_trace(
         go.Scatter(
             x=df["Datetime"],
@@ -188,16 +199,56 @@ def make_downstream_chart(df, threshold, current_time):
             y=threshold,
             line_color="#b42318",
             line_dash="dot",
-            annotation_text="Downstream Threshold",
+            annotation_text="Downstream Flow Threshold",
             annotation_position="top left",
         )
     fig.add_vline(x=current_time, line_color="#98a2b3", line_dash="dash")
     fig.update_layout(
-        title="Downstream Control Point Hydrograph",
+        title="Downstream Flow Hydrograph",
         margin=dict(l=20, r=20, t=60, b=20),
         legend=dict(orientation="h", y=1.08),
         xaxis_title="Time",
         yaxis_title="Flow (m3/s)",
+        height=360,
+    )
+    return fig
+
+
+def make_downstream_level_chart(df, threshold, current_time):
+    fig = go.Figure()
+    if "WLSG" in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df["Datetime"],
+                y=df["WLSG"],
+                name="Observed Downstream WL",
+                line=dict(color="black", width=2, dash="dash"),
+            )
+        )
+    if "downstream_level_optimized" in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df["Datetime"],
+                y=df["downstream_level_optimized"],
+                name="Optimized Downstream WL",
+                line=dict(color="magenta", width=2.5, dash="dash"),
+            )
+        )
+    if threshold is not None:
+        fig.add_hline(
+            y=threshold,
+            line_color="#b42318",
+            line_dash="dot",
+            annotation_text="Downstream WL Threshold",
+            annotation_position="top left",
+        )
+    fig.add_vline(x=current_time, line_color="#98a2b3", line_dash="dash")
+    fig.update_layout(
+        title="Downstream Water Level Hydrograph",
+        margin=dict(l=20, r=20, t=60, b=20),
+        legend=dict(orientation="h", y=1.08),
+        xaxis_title="Time",
+        yaxis_title="Water Level (m)",
         height=360,
     )
     return fig
@@ -230,8 +281,15 @@ def main():
     st.title("Dakdrinh Flood Operations Demo")
     st.caption("2025 flood event playback and recommendation screen based on notebook-generated optimization outputs.")
 
-    horizons = [24, 48, 72]
-    selected_horizon = st.sidebar.radio("Decision Horizon", horizons, index=1)
+    horizons = [24, 48, 72, 168, 336]
+    horizon_labels = {
+        24: "24 hours",
+        48: "48 hours",
+        72: "72 hours",
+        168: "1 week",
+        336: "2 weeks",
+    }
+    selected_horizon = st.sidebar.radio("Decision Horizon", horizons, index=1, format_func=horizon_labels.get)
     playback_container = st.sidebar.container()
 
     summary_paths = list_run_summaries()
@@ -276,12 +334,12 @@ def main():
         unsafe_allow_html=True,
     )
 
-    top1, top2, top3, top4, top5 = st.columns(5)
+    selected_horizon_label = horizon_labels[selected_horizon]
+    top1, top2, top3, top4 = st.columns(4)
     top1.metric("Playback Time", current_time.strftime("%Y-%m-%d %H:%M"))
-    top2.metric("Reservoir Level", f"{current_row['WLDD']:.2f} m")
-    top3.metric("Optimized Release", f"{current_row['Qoutput_Reservoir1']:.2f} m3/s")
-    top4.metric("Optimized Downstream", f"{current_row['Q_controlpoint']:.2f} m3/s")
-    top5.metric("End WL (Optimized)", f"{window_summary['water_level_optimized_end_m']:.2f} m")
+    top2.metric("Optimized Release", f"{current_row['Qoutput_Reservoir1']:.2f} m3/s")
+    top3.metric("Optimized Downstream", f"{current_row['Q_controlpoint']:.2f} m3/s")
+    top4.metric("End WL (Optimized)", f"{window_summary['water_level_optimized_end_m']:.2f} m")
 
     left, right = st.columns([1.1, 0.9])
     with left:
@@ -301,12 +359,25 @@ def main():
     with chart2:
         st.plotly_chart(make_release_chart(window_df, current_time), use_container_width=True)
 
-    st.plotly_chart(
-        make_downstream_chart(window_df, params.get("downstream_flow_threshold"), current_time),
-        use_container_width=True,
-    )
+    chart3, chart4 = st.columns(2)
+    with chart3:
+        st.plotly_chart(
+            make_downstream_flow_chart(window_df, params.get("downstream_flow_threshold"), current_time),
+            use_container_width=True,
+        )
+    with chart4:
+        st.plotly_chart(
+            make_downstream_level_chart(window_df, params.get("downstream_water_level_threshold"), current_time),
+            use_container_width=True,
+        )
 
     st.subheader("Run Summary")
+    st.caption(
+        f"Selected decision horizon: {selected_horizon_label}. "
+        f"Summary statistics below are recalculated for the active playback window "
+        f"from {window_summary['window_start'].strftime('%Y-%m-%d %H:%M')} "
+        f"to {window_summary['window_end'].strftime('%Y-%m-%d %H:%M')}."
+    )
     sum1, sum2, sum3, sum4 = st.columns(4)
     sum1.metric("Observed Peak Release", f"{window_summary['release_peak_observed']:.1f} m3/s")
     sum2.metric("Optimized Peak Release", f"{window_summary['release_peak_optimized']:.1f} m3/s")
@@ -316,6 +387,7 @@ def main():
     st.dataframe(
         {
                 "Metric": [
+                    "Decision horizon",
                     "Window start",
                     "Window end",
                     "Observed end WL",
@@ -324,6 +396,7 @@ def main():
                     "Downstream peak change vs observed",
                 ],
                 "Value": [
+                    selected_horizon_label,
                     window_summary["window_start"].strftime("%Y-%m-%d %H:%M"),
                     window_summary["window_end"].strftime("%Y-%m-%d %H:%M"),
                     f"{window_summary['water_level_observed_end_m']:.2f} m",
