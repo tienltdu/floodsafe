@@ -279,7 +279,7 @@ def render_alerts(flags: dict[str, bool]):
 
 def main():
     st.title("Dakdrinh Flood Operations Demo")
-    st.caption("2025 flood event playback and recommendation screen based on notebook-generated optimization outputs.")
+    st.caption("2025 flood event playback and recommendation screen based on optimization outputs.")
 
     horizons = [24, 48, 72, 168, 336]
     horizon_labels = {
