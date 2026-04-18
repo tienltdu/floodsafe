@@ -48,3 +48,25 @@ Use:
 
 - main file: `app.py`
 - dependencies: `requirements.txt`.
+
+## Commands to move Streamlit to AWS
+### Install basic software
+sudo apt update
+sudo apt install -y python3-pip python3-venv git nginx
+### Clone the GitHub repo and create the Python environment
+
+cd /home/ubuntu
+git clone https://github.com/tienltdu/floodsafe.git
+cd floodsafe
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+
+### Temporary running
+python3 -m streamlit run app.py
+
+### Permanent running
+nohup python3 -m streamlit run app.py
+
