@@ -52,7 +52,8 @@ Use:
 ## Commands to move Streamlit to AWS
 ### Install basic software
 sudo apt update
-sudo apt install -y python3-pip python3-venv git nginx
+
+sudo apt install -y python3-pip python3-venv git
 ### Clone the GitHub repo and create the Python environment
 
 cd /home/ubuntu
