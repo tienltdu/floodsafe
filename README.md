@@ -54,16 +54,23 @@ Use:
 sudo apt update
 
 sudo apt install -y python3-pip python3-venv git
+
 ### Clone the GitHub repo and create the Python environment
 
 cd /home/ubuntu
+
 git clone https://github.com/tienltdu/floodsafe.git
+
 cd floodsafe
 
 python3 -m venv .venv
+
 source .venv/bin/activate
+
 pip install --upgrade pip
+
 pip install -r requirements.txt
+
 
 ### Temporary running
 python3 -m streamlit run app.py
